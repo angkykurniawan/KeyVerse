@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build & deploy outputs
+dist/
+deploy_htdocs/
+
+# Confidential environment files
+.env
+.env.local
+.env.*.local
+api/.env
+AKUN_DUMMY.txt
+
+# Local SQLite database & logs
+api/storage/*.sqlite
+api/storage/*.sqlite-journal
+api/storage/*.db
+*.log
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

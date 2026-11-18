@@ -1,0 +1,19 @@
+# KeyVerse Root .htaccess (InfinityFree-safe: tanpa directive Options yang sering menyebabkan HTTP 500)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Blokir akses HTTP langsung ke file sensitif (.env, sql, sqlite, db, log)
+    RewriteRule (^|/)\.env - [F,L]
+    RewriteRule \.(sql|sqlite|db|log)$ - [F,L]
+
+    # Biarkan request /api ditangani oleh api/.htaccess
+    RewriteRule ^api(/.*)?$ - [L]
+
+    # Jika file atau folder nyata ada, sajikan langsung
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Fallback React SPA ke index.html
+    RewriteRule ^ index.html [L]
+</IfModule>

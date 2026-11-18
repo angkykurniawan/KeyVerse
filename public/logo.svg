@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="kvBg" x1="12" y1="8" x2="116" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#141E36" />
+      <stop offset="100%" stop-color="#060912" />
+    </linearGradient>
+    <linearGradient id="kvBorder" x1="8" y1="8" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFD000" />
+      <stop offset="50%" stop-color="#FF6B00" />
+      <stop offset="100%" stop-color="#00F0FF" />
+    </linearGradient>
+    <linearGradient id="kvGold" x1="28" y1="22" x2="96" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFE047" />
+      <stop offset="55%" stop-color="#FFB800" />
+      <stop offset="100%" stop-color="#FF5500" />
+    </linearGradient>
+    <linearGradient id="kvCyan" x1="56" y1="30" x2="108" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#66F7FF" />
+      <stop offset="100%" stop-color="#00B8D9" />
+    </linearGradient>
+  </defs>
+
+  <path
+    d="M26 8H102L120 26V102L102 120H26L8 102V26L26 8Z"
+    fill="url(#kvBg)"
+    stroke="url(#kvBorder)"
+    stroke-width="6"
+  />
+  <path
+    d="M31 18H97L110 31V91L97 104H31L18 91V31L31 18Z"
+    fill="#0B1122"
+    stroke="rgba(255,255,255,0.09)"
+    stroke-width="2"
+  />
+  <rect x="24" y="42" width="6" height="16" rx="2" fill="#00F0FF" opacity="0.85" />
+  <rect x="24" y="64" width="6" height="10" rx="2" fill="#FFB800" opacity="0.7" />
+  <path d="M38 30H53V96H38V30Z" fill="url(#kvGold)" />
+  <path d="M53 60L83 30H102L69 62L100 96H80L53 66V60Z" fill="url(#kvGold)" />
+  <path d="M72 62L99 34H106L79 62L106 96H98L72 62Z" fill="url(#kvCyan)" />
+  <rect x="38" y="108" width="52" height="4" rx="2" fill="url(#kvBorder)" />
+</svg>

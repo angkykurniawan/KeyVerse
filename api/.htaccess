@@ -1,0 +1,18 @@
+# KeyVerse API .htaccess (InfinityFree-safe: tanpa Options -Indexes yang dapat memicu HTTP 500)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Pastikan header Authorization diteruskan ke PHP pada shared hosting/CGI
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Blokir akses langsung ke file sensitif dan folder internal
+    RewriteRule (^|/)\.env - [F,L]
+    RewriteRule \.(sql|sqlite|db|log)$ - [F,L]
+    RewriteRule ^(config|lib|controllers|storage)(/.*)?$ - [F,L]
+
+    # Arahkan seluruh endpoint API ke index.php
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
