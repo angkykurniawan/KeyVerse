@@ -152,15 +152,12 @@ CREATE TABLE IF NOT EXISTS `app_settings` (
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- -----------------------------------------------------------------------------
--- 4. Seed Admin & 4 User Dummy (password bcrypt valid untuk PHP 8)
+-- 4. Seed Akun 1 Admin & 1 User (password bcrypt valid untuk PHP 8)
 -- -----------------------------------------------------------------------------
 INSERT INTO `users` (`id`, `name`, `username`, `email`, `password_hash`, `role`, `is_active`, `created_by`)
 VALUES
-  (1, 'Administrator', 'admin', 'admin@keyverse.local', '$2y$10$xnVtnhXp4EFvghy0f7J13.EredaRkhXMWRi.mNEKsLmQZ8WjAfhI.', 'admin', 1, NULL),
-  (2, 'Nadia Pratama', 'nadia.speed', 'nadia@keyverse.local', '$2y$10$UXM7PBhG/Hiwdv/8Hd4FFOTLw40jm25EFuJVnPQeb7lPyZ9tnmViK', 'user', 1, 1),
-  (3, 'Raka Wijaya', 'raka.pro', 'raka@keyverse.local', '$2y$10$UXM7PBhG/Hiwdv/8Hd4FFOTLw40jm25EFuJVnPQeb7lPyZ9tnmViK', 'user', 1, 1),
-  (4, 'Budi Santoso', 'budi.racer', 'budi@keyverse.local', '$2y$10$UXM7PBhG/Hiwdv/8Hd4FFOTLw40jm25EFuJVnPQeb7lPyZ9tnmViK', 'user', 1, 1),
-  (5, 'Sinta Maharani', 'sinta.dev', 'sinta@keyverse.local', '$2y$10$UXM7PBhG/Hiwdv/8Hd4FFOTLw40jm25EFuJVnPQeb7lPyZ9tnmViK', 'user', 1, 1)
+  (1, 'Administrator', 'admin', 'admin@keyverse.local', '$2y$10$d/4cQvP1Tzryba1Zk2x9P.JgWMscC3MOu0CTz4JuUYQWX4qJH4d46', 'admin', 1, NULL),
+  (2, 'Peserta Demo', 'user', 'user@keyverse.local', '$2y$10$f1JIsmj8jZpEiy3MmIhUnePCZuIIFQntxeDk0otJk0DmA6lnUKMv2', 'user', 1, 1)
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 -- -----------------------------------------------------------------------------
@@ -176,16 +173,12 @@ VALUES
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 -- -----------------------------------------------------------------------------
--- 6. Seed Riwayat Balapan Dummy (agar Podium & Grafik langsung tampil hidup)
+-- 6. Seed Riwayat Balapan Awal (agar Podium & Grafik langsung aktif)
 -- -----------------------------------------------------------------------------
 INSERT IGNORE INTO `typing_sessions`
   (`id`, `user_id`, `language_id`, `keywords_json`, `ai_model`, `generated_text`, `wpm`, `raw_wpm`, `accuracy`, `total_chars`, `correct_chars`, `incorrect_chars`, `word_count`, `duration_seconds`)
 VALUES
   (1, 2, 1, '["algoritma","server","enkripsi","database","jaringan"]', 'gemini-2.5-flash', 'Pengembangan algoritma yang efisien membantu server memproses permintaan jaringan dengan cepat sambil menjaga enkripsi data tetap aman di dalam database modern.', 92.40, 95.10, 98.40, 154, 152, 2, 21, 19.70),
   (2, 2, 2, '["cloud","latency","pipeline","security","deploy"]', 'gemini-2.5-flash', 'Modern cloud infrastructure reduces network latency while automated pipeline tools strengthen security checks before every production deploy.', 86.20, 89.00, 97.60, 136, 133, 3, 18, 18.50),
-  (3, 3, 1, '["investasi","strategi","negosiasi","profit","audit"]', 'gemini-2.5-flash', 'Strategi investasi jangka panjang membutuhkan hasil audit yang transparan serta kemampuan negosiasi matang agar perusahaan memperoleh profit berkelanjutan.', 78.60, 81.20, 96.80, 152, 148, 4, 19, 22.60),
-  (4, 3, 2, '["design","motion","layout","contrast","vector"]', 'gemini-2.0-flash', 'Thoughtful layout structure combines clean vector shapes with strong visual contrast and subtle motion cues for clear interface design.', 74.10, 76.80, 96.50, 134, 129, 5, 19, 20.90),
-  (5, 4, 1, '["diagnosis","terapi","vaksin","anatomi","resep"]', 'gemini-2.5-flash', 'Dokter mempelajari anatomi tubuh secara menyeluruh sebelum menetapkan diagnosis akurat, menyusun rencana terapi, memberikan vaksin, dan menuliskan resep obat.', 64.80, 68.00, 95.40, 158, 151, 7, 20, 28.00),
-  (6, 4, 1, '["turnamen","refleks","kombo","juara","arena"]', 'gemini-2.5-flash', 'Setiap peserta turnamen melatih refleks jari di arena latihan agar mampu menjaga kombo ketikan tetap stabil hingga menjadi juara utama.', 69.50, 72.10, 96.90, 135, 131, 4, 20, 22.60),
-  (7, 5, 2, '["compiler","memory","syntax","runtime","module"]', 'gemini-2.5-flash', 'A reliable compiler validates program syntax early, manages memory safely during runtime, and links every reusable module without slowing down builds.', 58.30, 61.00, 95.80, 148, 142, 6, 21, 29.20),
-  (8, 5, 1, '["algoritma","server","enkripsi","database","jaringan"]', 'gemini-2.0-flash', 'Keamanan jaringan dan enkripsi pesan pada server utama membuat transaksi database berjalan lancar berkat rancangan algoritma yang teruji.', 62.10, 64.90, 96.20, 135, 130, 5, 18, 25.10);
+  (3, 1, 1, '["investasi","strategi","negosiasi","profit","audit"]', 'gemini-2.5-flash', 'Strategi investasi jangka panjang membutuhkan hasil audit yang transparan serta kemampuan negosiasi matang agar perusahaan memperoleh profit berkelanjutan.', 78.60, 81.20, 96.80, 152, 148, 4, 19, 22.60),
+  (4, 1, 2, '["design","motion","layout","contrast","vector"]', 'gemini-2.0-flash', 'Thoughtful layout structure combines clean vector shapes with strong visual contrast and subtle motion cues for clear interface design.', 74.10, 76.80, 96.50, 134, 129, 5, 19, 20.90);

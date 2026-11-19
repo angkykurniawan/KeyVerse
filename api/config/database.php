@@ -287,11 +287,9 @@ function seed_local_dummy_data(PDO $pdo, int $adminId): void
         'INSERT INTO users (name, username, email, password_hash, role, is_active, created_by) VALUES (?, ?, ?, ?, ?, 1, ?)'
     );
 
+    // Tepat 1 akun untuk role user (role admin sudah dibuat di ensure_initial_admin)
     $dummies = [
-        ['Nadia Pratama', 'nadia.speed', 'nadia@keyverse.local'],
-        ['Raka Wijaya', 'raka.pro', 'raka@keyverse.local'],
-        ['Budi Santoso', 'budi.racer', 'budi@keyverse.local'],
-        ['Sinta Maharani', 'sinta.dev', 'sinta@keyverse.local'],
+        ['Peserta Demo', 'user', 'user@keyverse.local'],
     ];
 
     $userIds = [];
@@ -308,11 +306,9 @@ function seed_local_dummy_data(PDO $pdo, int $adminId): void
     );
 
     $sessions = [
-        [$userIds['nadia.speed'], 1, '["algoritma","server","enkripsi","database","jaringan"]', 'gemini-2.5-flash', 'Pengembangan algoritma yang efisien membantu server memproses permintaan jaringan dengan cepat sambil menjaga enkripsi data tetap aman di dalam database modern.', 92.4, 95.1, 98.4, 154, 152, 2, 21, 19.7],
-        [$userIds['nadia.speed'], 2, '["cloud","latency","pipeline","security","deploy"]', 'gemini-2.5-flash', 'Modern cloud infrastructure reduces network latency while automated pipeline tools strengthen security checks before every production deploy.', 86.2, 89.0, 97.6, 136, 133, 3, 18, 18.5],
-        [$userIds['raka.pro'], 1, '["investasi","strategi","negosiasi","profit","audit"]', 'gemini-2.5-flash', 'Strategi investasi jangka panjang membutuhkan hasil audit yang transparan serta kemampuan negosiasi matang agar perusahaan memperoleh profit berkelanjutan.', 78.6, 81.2, 96.8, 152, 148, 4, 19, 22.6],
-        [$userIds['budi.racer'], 1, '["turnamen","refleks","kombo","juara","arena"]', 'gemini-2.5-flash', 'Setiap peserta turnamen melatih refleks jari di arena latihan agar mampu menjaga kombo ketikan tetap stabil hingga menjadi juara utama.', 69.5, 72.1, 96.9, 135, 131, 4, 20, 22.6],
-        [$userIds['sinta.dev'], 2, '["compiler","memory","syntax","runtime","module"]', 'gemini-2.5-flash', 'A reliable compiler validates program syntax early, manages memory safely during runtime, and links every reusable module without slowing down builds.', 58.3, 61.0, 95.8, 148, 142, 6, 21, 29.2],
+        [$userIds['user'], 1, '["algoritma","server","enkripsi","database","jaringan"]', 'gemini-2.5-flash', 'Pengembangan algoritma yang efisien membantu server memproses permintaan jaringan dengan cepat sambil menjaga enkripsi data tetap aman di dalam database modern.', 92.4, 95.1, 98.4, 154, 152, 2, 21, 19.7],
+        [$userIds['user'], 2, '["cloud","latency","pipeline","security","deploy"]', 'gemini-2.5-flash', 'Modern cloud infrastructure reduces network latency while automated pipeline tools strengthen security checks before every production deploy.', 86.2, 89.0, 97.6, 136, 133, 3, 18, 18.5],
+        [$adminId, 1, '["investasi","strategi","negosiasi","profit","audit"]', 'gemini-2.5-flash', 'Strategi investasi jangka panjang membutuhkan hasil audit yang transparan serta kemampuan negosiasi matang agar perusahaan memperoleh profit berkelanjutan.', 78.6, 81.2, 96.8, 152, 148, 4, 19, 22.6],
     ];
 
     foreach ($sessions as $s) {

@@ -122,13 +122,13 @@ export function LoginPage() {
           <form onSubmit={handleSubmit} className="stack-md">
             <div className="form-group">
               <label className="form-label" htmlFor="login-identifier">
-                Username / Email Peserta
+                Username / Email
               </label>
               <input
                 id="login-identifier"
                 type="text"
                 className="input"
-                placeholder="contoh: budi.racer"
+                placeholder="Masukkan username atau email"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 autoComplete="username"
@@ -177,6 +177,34 @@ export function LoginPage() {
               {submitting ? 'MEMVERIFIKASI...' : 'MASUK KE ARENA'}
             </button>
           </form>
+
+          {/* Demo Account Request Notice */}
+          <div
+            style={{
+              marginTop: 18,
+              padding: '12px 14px',
+              borderRadius: 10,
+              background: 'rgba(0, 240, 255, 0.05)',
+              border: '1px solid rgba(0, 240, 255, 0.22)',
+              fontSize: '0.84rem',
+              color: 'var(--text-secondary)',
+              textAlign: 'center',
+              lineHeight: 1.55,
+            }}
+          >
+            <span>Untuk demo minta akun ke </span>
+            <a
+              href="mailto:kurniawan.angang2005@gmail.com"
+              style={{
+                color: 'var(--neon-cyan)',
+                fontWeight: 600,
+                textDecoration: 'underline',
+                wordBreak: 'break-all',
+              }}
+            >
+              kurniawan.angang2005@gmail.com
+            </a>
+          </div>
 
           <div
             style={{
