@@ -12,6 +12,7 @@ import type {
   TypingSessionRecord,
   User,
 } from '../types';
+import { clientStore } from './clientStore';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, '');
 const TOKEN_STORAGE_KEY = 'keyverse_jwt_token';
@@ -45,8 +46,22 @@ interface RequestOptions {
   body?: unknown;
 }
 
+// Deteksi apakah sedang berjalan di Vercel tanpa backend PHP terpisah
+function isVercelStandalone(): boolean {
+  if (typeof window === 'undefined') return false;
+  const isVercelHost = window.location.hostname.includes('vercel.app');
+  // Jika tidak ada custom API_BASE luar (masih '/api'), berarti Vercel tanpa PHP
+  return isVercelHost && (API_BASE === '/api' || API_BASE === '');
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const realMethod = options.method || 'GET';
+
+  // Jika di Vercel tanpa PHP, langsung gunakan ClientStore super cepat tanpa network roundtrip
+  if (isVercelStandalone()) {
+    return handleClientFallback<T>(path, realMethod, options.body);
+  }
+
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -57,7 +72,6 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers['X-Auth-Token'] = token;
   }
 
-  // Gunakan POST + X-HTTP-Method-Override untuk PUT/DELETE agar kompatibel dengan firewall InfinityFree
   let fetchMethod: string = realMethod;
   if (realMethod === 'PUT' || realMethod === 'DELETE') {
     fetchMethod = 'POST';
@@ -73,33 +87,161 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     bodyStr = '{}';
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: fetchMethod,
-    headers,
-    body: fetchMethod === 'GET' ? undefined : bodyStr,
-  });
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: fetchMethod,
+      headers,
+      body: fetchMethod === 'GET' ? undefined : bodyStr,
+    });
 
-  const text = await res.text();
-  let data: Record<string, unknown> = {};
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new ApiError(`Respon server tidak valid (HTTP ${res.status}).`, res.status);
+    if (res.status === 404 || res.status === 403 || res.status === 502) {
+      // Server PHP tidak ada di host ini (misal di Vercel), fallback mulus ke ClientStore
+      return handleClientFallback<T>(path, realMethod, options.body);
     }
+
+    const text = await res.text();
+    let data: Record<string, unknown> = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        // Jika respon berupa HTML (misal aes.js InfinityFree challenge atau 404 HTML), fallback
+        return handleClientFallback<T>(path, realMethod, options.body);
+      }
+    }
+
+    if (!res.ok) {
+      const msg = typeof data.error === 'string' ? data.error : `Permintaan gagal dengan status HTTP ${res.status}.`;
+      throw new ApiError(msg, res.status, data.details as Record<string, unknown> | undefined);
+    }
+
+    return data as T;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    // Network error / CORS blocked, fallback ke ClientStore
+    return handleClientFallback<T>(path, realMethod, options.body);
+  }
+}
+
+// Router Fallback internal untuk menangani semua request di Vercel secara native
+async function handleClientFallback<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const b = (body as Record<string, any>) || {};
+
+  // Auth
+  if (path === '/auth/login' && method === 'POST') {
+    return clientStore.handleLogin(b.identifier || '', b.password || '') as T;
+  }
+  if (path === '/auth/me') {
+    return clientStore.handleMe() as T;
+  }
+  if (path === '/auth/change-password' && method === 'POST') {
+    return clientStore.handleChangePassword(b.current_password || '', b.new_password || '') as T;
   }
 
-  if (!res.ok) {
-    const msg =
-      typeof data.error === 'string'
-        ? data.error
-        : res.status === 500
-          ? 'Server API tidak merespon (HTTP 500). Pastikan server PHP API aktif (jalankan "npm run dev") atau periksa konfigurasi .env & database.'
-          : `Permintaan gagal dengan status HTTP ${res.status}.`;
-    throw new ApiError(msg, res.status, data.details as Record<string, unknown> | undefined);
+  // Languages
+  if (path.startsWith('/languages')) {
+    const includeAll = path.includes('all=1');
+    return clientStore.getLanguages(includeAll) as T;
+  }
+  if (path === '/admin/languages' && method === 'POST') {
+    return clientStore.createLanguage(b as any) as T;
+  }
+  const langMatch = path.match(/^\/admin\/languages\/(\d+)$/);
+  if (langMatch) {
+    const id = parseInt(langMatch[1], 10);
+    if (method === 'PUT') return clientStore.updateLanguage(id, b) as T;
+    if (method === 'DELETE') return clientStore.deleteLanguage(id) as T;
   }
 
-  return data as T;
+  // Admin Overview & Users
+  if (path === '/admin/overview') {
+    return clientStore.getAdminOverview() as T;
+  }
+  if (path === '/admin/users' && method === 'GET') {
+    return clientStore.getAdminUsers() as T;
+  }
+  if (path === '/admin/users' && method === 'POST') {
+    return clientStore.createUser(b as any) as T;
+  }
+  const userMatch = path.match(/^\/admin\/users\/(\d+)$/);
+  if (userMatch) {
+    const id = parseInt(userMatch[1], 10);
+    if (method === 'PUT') return clientStore.updateUser(id, b) as T;
+    if (method === 'DELETE') return clientStore.deleteUser(id) as T;
+  }
+
+  // Admin AI Config
+  if (path === '/admin/ai-config') {
+    if (method === 'POST') return clientStore.saveAdminAiConfig(b as any) as T;
+    return clientStore.getAdminAiConfig() as T;
+  }
+
+  // AI Status & Generate
+  if (path === '/ai/status') {
+    return { ai_ready: true, preferred_model: 'gemini-2.5-flash' } as T;
+  }
+  if (path === '/ai/generate' && method === 'POST') {
+    const generated = await clientStore.generateTypingText(b as any);
+    return generated as T;
+  }
+
+  // Sessions
+  if (path === '/sessions' && method === 'POST') {
+    return clientStore.saveSession(b as any) as T;
+  }
+  if (path.startsWith('/sessions')) {
+    const url = new URL('http://dummy' + path);
+    const langId = url.searchParams.get('language_id');
+    return clientStore.getSessions(langId ? parseInt(langId, 10) : null) as T;
+  }
+  const sessMatch = path.match(/^\/sessions\/(\d+)$/);
+  if (sessMatch && method === 'DELETE') {
+    return clientStore.deleteSession(parseInt(sessMatch[1], 10)) as T;
+  }
+
+  // Leaderboard
+  if (path.startsWith('/leaderboard')) {
+    const url = new URL('http://dummy' + path);
+    const langId = url.searchParams.get('language_id');
+    return clientStore.getLeaderboard(langId ? parseInt(langId, 10) : null) as T;
+  }
+
+  // Multiplayer Rooms
+  if (path === '/rooms/open') {
+    return clientStore.getOpenRooms() as T;
+  }
+  if (path === '/rooms' && method === 'POST') {
+    return clientStore.createRoom(b as any) as T;
+  }
+  if (path === '/rooms/join' && method === 'POST') {
+    return clientStore.joinRoom(b.code || '') as T;
+  }
+  const roomReadyMatch = path.match(/^\/rooms\/([^/]+)\/ready$/);
+  if (roomReadyMatch && method === 'POST') {
+    return clientStore.setRoomReady(decodeURIComponent(roomReadyMatch[1]), b.is_ready) as T;
+  }
+  const roomStartMatch = path.match(/^\/rooms\/([^/]+)\/start$/);
+  if (roomStartMatch && method === 'POST') {
+    return clientStore.startRoom(decodeURIComponent(roomStartMatch[1])) as T;
+  }
+  const roomProgMatch = path.match(/^\/rooms\/([^/]+)\/progress$/);
+  if (roomProgMatch && method === 'POST') {
+    return clientStore.sendRoomProgress(decodeURIComponent(roomProgMatch[1]), b as any) as T;
+  }
+  const roomRematchMatch = path.match(/^\/rooms\/([^/]+)\/rematch$/);
+  if (roomRematchMatch && method === 'POST') {
+    return clientStore.rematchRoom(decodeURIComponent(roomRematchMatch[1])) as T;
+  }
+  const roomLeaveMatch = path.match(/^\/rooms\/([^/]+)\/leave$/);
+  if (roomLeaveMatch && method === 'POST') {
+    return clientStore.leaveRoom(decodeURIComponent(roomLeaveMatch[1])) as T;
+  }
+  const roomGetMatch = path.match(/^\/rooms\/([^/]+)$/);
+  if (roomGetMatch && method === 'GET') {
+    return clientStore.getRoom(decodeURIComponent(roomGetMatch[1])) as T;
+  }
+
+  throw new ApiError(`Route '${path}' belum didukung di mode client.`, 404);
 }
 
 export const api = {
