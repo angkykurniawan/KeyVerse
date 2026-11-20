@@ -1,53 +1,70 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertCircle,
-  Check,
   CheckCircle2,
-  Copy,
   Crown,
-  DoorOpen,
-  Flame,
   Globe,
   Hash,
-  KeyRound,
-  LogIn,
   Play,
-  RefreshCw,
   RotateCcw,
   Swords,
   Timer,
   Trophy,
-  Users,
   Volume2,
   VolumeX,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api, ApiError } from '../lib/api';
 import { getRankTier } from '../lib/ranks';
 import { playKeySound } from '../lib/sound';
-import type { Language, OpenRoomSummary, RaceRoom } from '../types';
+import type { GeneratedPassage, Language } from '../types';
 
 const VERSUS_DURATION_MS = 60_000;
 
-interface VersusPageProps {
-  onOpenAdminAi: () => void;
+export type BotDifficulty = 'easy' | 'medium' | 'hard';
+
+interface BotRacer {
+  id: string;
+  name: string;
+  tag: string;
+  targetWpm: number;
+  color: string;
 }
 
-interface WordSubmission {
-  typed: string;
-  target: string;
-  correct: boolean;
-}
-
-const RACER_COLORS = [
-  '#00f0ff',
-  '#ff2e88',
-  '#00e599',
-  '#c084fc',
-  '#fb923c',
-  '#38bdf8',
-  '#a3e635',
-];
+const DIFFICULTY_CONFIG: Record<
+  BotDifficulty,
+  { label: string; badge: string; desc: string; bots: BotRacer[] }
+> = {
+  easy: {
+    label: 'EASY (Rookie Heat)',
+    badge: 'badge-emerald',
+    desc: 'Lawan 2 bot pemula dengan kecepatan santai 35 - 48 WPM. Cocok untuk pemanasan.',
+    bots: [
+      { id: 'bot-1', name: 'NOVA-35', tag: 'ROOKIE', targetWpm: 35, color: '#00e599' },
+      { id: 'bot-2', name: 'STRIKER-48', tag: 'PACER', targetWpm: 48, color: '#38bdf8' },
+    ],
+  },
+  medium: {
+    label: 'MEDIUM (Pro League)',
+    badge: 'badge-cyan',
+    desc: 'Lawan 3 bot cepat dan tangguh 62 - 82 WPM. Uji ketahanan akurasi dan kecepatan Anda.',
+    bots: [
+      { id: 'bot-1', name: 'VOLT-62', tag: 'PRO', targetWpm: 62, color: '#00f0ff' },
+      { id: 'bot-2', name: 'PHANTOM-75', tag: 'ELITE', targetWpm: 75, color: '#c084fc' },
+      { id: 'bot-3', name: 'CYBER-82', tag: 'CHALLENGER', targetWpm: 82, color: '#fb923c' },
+    ],
+  },
+  hard: {
+    label: 'HARD (Grand Championship)',
+    badge: 'badge-amber',
+    desc: 'Lawan 3 bot monster super cepat 90 - 115 WPM. Hanya untuk pengetik tingkat Master!',
+    bots: [
+      { id: 'bot-1', name: 'APEX-90', tag: 'MASTER', targetWpm: 90, color: '#ffb800' },
+      { id: 'bot-2', name: 'TITAN-102', tag: 'GRANDMASTER', targetWpm: 102, color: '#a3e635' },
+      { id: 'bot-3', name: 'HYPERION-115', tag: 'CHAMPION', targetWpm: 115, color: '#ff2e88' },
+    ],
+  },
+};
 
 const KEYWORD_PRESETS: { label: string; words: [string, string, string, string, string] }[] = [
   { label: 'Teknologi', words: ['algoritma', 'server', 'enkripsi', 'database', 'jaringan'] },
@@ -63,59 +80,54 @@ function formatClock(ms: number): string {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
+interface WordSubmission {
+  typed: string;
+  target: string;
+  correct: boolean;
+}
+
+export function VersusPage({ onOpenAdminAi: _onOpenAdminAi }: { onOpenAdminAi?: () => void }) {
   const { user, aiReady, refreshAiStatus } = useAuth();
 
-  const [lobbyTab, setLobbyTab] = useState<'join' | 'create'>('join');
+  // Setup State
+  const [difficulty, setDifficulty] = useState<BotDifficulty>('medium');
   const [languages, setLanguages] = useState<Language[]>([]);
   const [selectedLangId, setSelectedLangId] = useState<number>(0);
   const [keywords, setKeywords] = useState<string[]>(['', '', '', '', '']);
 
-  const [openRooms, setOpenRooms] = useState<OpenRoomSummary[]>([]);
-  const [loadingOpenRooms, setLoadingOpenRooms] = useState(false);
-  const [joinCode, setJoinCode] = useState('');
-  const [creatingRoom, setCreatingRoom] = useState(false);
-  const [joiningRoom, setJoiningRoom] = useState(false);
+  // Race State
+  const [gameState, setGameState] = useState<'lobby' | 'countdown' | 'racing' | 'finished'>('lobby');
+  const [passage, setPassage] = useState<GeneratedPassage | null>(null);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [room, setRoom] = useState<RaceRoom | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [rematching, setRematching] = useState(false);
-  const [clockOffsetMs, setClockOffsetMs] = useState(0);
-  const [countdownSec, setCountdownSec] = useState<number>(0);
+  const [countdownSec, setCountdownSec] = useState<number>(3);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
-  // Real-input 1-minute multiplayer typing state
+  // Typing Inputs
   const [words, setWords] = useState<string[]>([]);
   const [baseWords, setBaseWords] = useState<string[]>([]);
   const [wordIndex, setWordIndex] = useState(0);
   const [currentInput, setCurrentInput] = useState('');
   const [history, setHistory] = useState<WordSubmission[]>([]);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const [localFinished, setLocalFinished] = useState(false);
   const [scrollY, setScrollY] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const activeWordRef = useRef<HTMLSpanElement>(null);
-  const lastSyncRef = useRef<number>(0);
   const finishedRef = useRef(false);
-  const latestMetricsRef = useRef({
-    progress: 0,
+
+  const [playerMetrics, setPlayerMetrics] = useState({
     wpm: 0,
     raw_wpm: 0,
     accuracy: 100,
     correct_chars: 0,
     incorrect_chars: 0,
-    duration_seconds: 0,
-    finished: false,
+    total_chars: 0,
   });
 
   useEffect(() => {
     refreshAiStatus();
-  }, [refreshAiStatus]);
-
-  useEffect(() => {
     api
       .getLanguages(false)
       .then((res) => {
@@ -125,303 +137,125 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [refreshAiStatus]);
 
-  const loadOpenRooms = useCallback(async () => {
-    setLoadingOpenRooms(true);
-    try {
-      const res = await api.getOpenRooms();
-      setOpenRooms(res.rooms);
-    } catch {
-    } finally {
-      setLoadingOpenRooms(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (room) return;
-    loadOpenRooms();
-    const timer = window.setInterval(loadOpenRooms, 5000);
-    return () => window.clearInterval(timer);
-  }, [room, loadOpenRooms]);
-
-  const resetLocalTyping = useCallback((baseText = '') => {
-    const split = baseText.trim() ? baseText.trim().split(/\s+/).filter(Boolean) : [];
-    setBaseWords(split);
-    setWords(split);
-    setWordIndex(0);
-    setCurrentInput('');
-    setHistory([]);
-    setElapsedMs(0);
-    setLocalFinished(false);
-    setScrollY(0);
-    finishedRef.current = false;
-    lastSyncRef.current = 0;
-    latestMetricsRef.current = {
-      progress: 0,
-      wpm: 0,
-      raw_wpm: 0,
-      accuracy: 100,
-      correct_chars: 0,
-      incorrect_chars: 0,
-      duration_seconds: 0,
-      finished: false,
-    };
-  }, []);
-
-  const pushProgress = useCallback(
-    async (roomCode: string, payload: typeof latestMetricsRef.current) => {
-      try {
-        const res = await api.sendRoomProgress(roomCode, payload);
-        setRoom(res.room);
-      } catch {}
-    },
-    []
-  );
-
-  // Poll active room
-  useEffect(() => {
-    if (!room) return;
-    const intervalMs =
-      room.status === 'racing' || room.status === 'countdown'
-        ? 800
-        : room.status === 'waiting'
-          ? 1200
-          : 2500;
-
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const res = await api.getRoom(room.code);
-        if (cancelled) return;
-        const nextRoom = res.room;
-        setClockOffsetMs(nextRoom.server_time_ms - Date.now());
-
-        if (
-          nextRoom.generated_text !== room.generated_text ||
-          (room.status === 'finished' && nextRoom.status === 'waiting')
-        ) {
-          resetLocalTyping(nextRoom.generated_text);
-        }
-        setRoom(nextRoom);
-      } catch {}
-    };
-
-    const id = window.setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [room, resetLocalTyping]);
-
-  // Synchronized countdown
-  useEffect(() => {
-    if (!room || room.status !== 'countdown' || !room.starts_at_ms) {
-      setCountdownSec(0);
+  // Generate soal & mulai Countdown
+  const handleStartRace = async () => {
+    setError(null);
+    const cleanKeywords = keywords.map((k) => k.trim());
+    if (cleanKeywords.some((k) => !k)) {
+      setError('Lengkapi tepat 5 kata utama topik balapan terlebih dahulu.');
       return;
     }
-    const tick = () => {
-      const serverNow = Date.now() + clockOffsetMs;
-      const diff = (room.starts_at_ms || 0) - serverNow;
-      setCountdownSec(diff <= 0 ? 0 : Math.ceil(diff / 1000));
-    };
-    tick();
-    const id = window.setInterval(tick, 100);
-    return () => window.clearInterval(id);
-  }, [room, clockOffsetMs]);
 
-  // Synchronized 60-second race timer
+    setStarting(true);
+    try {
+      const res = await api.generateTypingText({
+        language_id: selectedLangId,
+        keywords: cleanKeywords,
+      });
+      setPassage(res);
+
+      const split = res.text.trim().split(/\s+/).filter(Boolean);
+      setBaseWords(split);
+      setWords(split);
+      setWordIndex(0);
+      setCurrentInput('');
+      setHistory([]);
+      setElapsedMs(0);
+      setScrollY(0);
+      finishedRef.current = false;
+      setPlayerMetrics({
+        wpm: 0,
+        raw_wpm: 0,
+        accuracy: 100,
+        correct_chars: 0,
+        incorrect_chars: 0,
+        total_chars: 0,
+      });
+
+      // Mulai Countdown 3 detik
+      setGameState('countdown');
+      setCountdownSec(3);
+
+      let count = 3;
+      const countTimer = window.setInterval(() => {
+        count--;
+        if (count > 0) {
+          setCountdownSec(count);
+          if (soundEnabled) playKeySound('correct');
+        } else {
+          window.clearInterval(countTimer);
+          setCountdownSec(0);
+          setGameState('racing');
+          if (soundEnabled) playKeySound('complete');
+          setTimeout(() => inputRef.current?.focus(), 40);
+        }
+      }, 1000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Gagal menyiapkan soal balapan AI.');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  // Timer 60 Detik saat balapan berjalan
   useEffect(() => {
-    if (!room || room.status !== 'racing' || !room.starts_at_ms || localFinished) return;
-    setTimeout(() => inputRef.current?.focus(), 40);
+    if (gameState !== 'racing' || finishedRef.current) return;
 
-    const id = window.setInterval(() => {
-      const serverNow = Date.now() + clockOffsetMs;
-      const elapsed = Math.max(0, serverNow - (room.starts_at_ms || serverNow));
-      if (elapsed >= VERSUS_DURATION_MS && !finishedRef.current) {
-        finishedRef.current = true;
+    const startTimestamp = Date.now();
+    const interval = window.setInterval(() => {
+      const diff = Date.now() - startTimestamp;
+      if (diff >= VERSUS_DURATION_MS) {
         setElapsedMs(VERSUS_DURATION_MS);
-        setLocalFinished(true);
+        finishedRef.current = true;
+        setGameState('finished');
         if (soundEnabled) playKeySound('complete');
-        const finalPayload = {
-          ...latestMetricsRef.current,
-          progress: 100,
-          duration_seconds: 60,
-          finished: true,
-        };
-        latestMetricsRef.current = finalPayload;
-        pushProgress(room.code, finalPayload);
-        window.clearInterval(id);
+        window.clearInterval(interval);
         return;
       }
-      setElapsedMs(elapsed);
-    }, 80);
+      setElapsedMs(diff);
+    }, 100);
 
-    return () => window.clearInterval(id);
-  }, [room, clockOffsetMs, localFinished, soundEnabled, pushProgress]);
+    return () => window.clearInterval(interval);
+  }, [gameState, soundEnabled]);
 
+  // Simpan hasil ke database otomatis saat balapan selesai
+  useEffect(() => {
+    if (gameState === 'finished' && passage) {
+      api.saveSession({
+        language_id: passage.language.id,
+        keywords: passage.keywords,
+        ai_model: passage.model_used,
+        generated_text: passage.text,
+        wpm: playerMetrics.wpm,
+        raw_wpm: playerMetrics.raw_wpm,
+        accuracy: playerMetrics.accuracy,
+        total_chars: playerMetrics.total_chars,
+        correct_chars: playerMetrics.correct_chars,
+        incorrect_chars: playerMetrics.incorrect_chars,
+        word_count: passage.word_count,
+        duration_seconds: 60,
+      }).catch(() => {});
+    }
+  }, [gameState, passage, playerMetrics]);
+
+  // Scroll viewport typing
   useEffect(() => {
     const el = activeWordRef.current;
     if (!el) return;
     setScrollY(Math.max(0, el.offsetTop - 20));
   }, [wordIndex]);
 
-  const evaluateMetrics = useCallback(
-    (subs: WordSubmission[], activeTyped: string, activeTarget: string, ms: number) => {
-      let correctChars = 0;
-      let incorrectChars = 0;
-      for (const item of subs) {
-        if (item.correct) {
-          correctChars += item.target.length + 1;
-        } else {
-          incorrectChars += Math.max(item.typed.length, item.target.length);
-        }
-      }
-      for (let i = 0; i < activeTyped.length; i++) {
-        if (activeTyped[i] === activeTarget[i]) correctChars++;
-        else incorrectChars++;
-      }
-
-      const totalTyped =
-        subs.reduce((acc, s) => acc + s.typed.length + 1, 0) + activeTyped.length;
-      const evaluated = correctChars + incorrectChars;
-      const accuracy =
-        evaluated > 0
-          ? Number(Math.max(0, Math.min(100, (correctChars / evaluated) * 100)).toFixed(1))
-          : 100;
-      const minutes = Math.max(ms, 500) / 60000;
-      const wpm = Number(Math.max(0, correctChars / 5 / minutes).toFixed(1));
-      const rawWpm = Number(Math.max(0, totalTyped / 5 / minutes).toFixed(1));
-
-      return {
-        progress: Number(Math.min(99, (ms / VERSUS_DURATION_MS) * 100).toFixed(1)),
-        wpm,
-        raw_wpm: rawWpm,
-        accuracy,
-        correct_chars: correctChars,
-        incorrect_chars: incorrectChars,
-        duration_seconds: Number((ms / 1000).toFixed(2)),
-        finished: false,
-      };
-    },
-    []
-  );
-
-  const handleCreateRoom = async () => {
-    setError(null);
-    const cleanKeywords = keywords.map((k) => k.trim());
-    if (cleanKeywords.some((k) => !k)) {
-      setError('Isi penuh tepat 5 kata utama terlebih dahulu.');
-      return;
-    }
-
-    setCreatingRoom(true);
-    try {
-      const res = await api.createRoom({
-        language_id: selectedLangId,
-        keywords: cleanKeywords,
-      });
-      resetLocalTyping(res.room.generated_text);
-      setClockOffsetMs(res.room.server_time_ms - Date.now());
-      setRoom(res.room);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Gagal membuat room adu ketik.');
-    } finally {
-      setCreatingRoom(false);
-    }
-  };
-
-  const handleJoinRoom = async (codeToJoin?: string) => {
-    const cleanCode = (codeToJoin ?? joinCode).trim().toUpperCase();
-    if (!cleanCode) {
-      setError('Masukkan kode room dari kawan Anda.');
-      return;
-    }
-    setError(null);
-    setJoiningRoom(true);
-    try {
-      const res = await api.joinRoom(cleanCode);
-      resetLocalTyping(res.room.generated_text);
-      setClockOffsetMs(res.room.server_time_ms - Date.now());
-      setRoom(res.room);
-      setJoinCode('');
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Gagal bergabung ke room.');
-    } finally {
-      setJoiningRoom(false);
-    }
-  };
-
-  const handleStartRace = async () => {
-    if (!room) return;
-    setStarting(true);
-    setError(null);
-    try {
-      const res = await api.startRoom(room.code);
-      setClockOffsetMs(res.room.server_time_ms - Date.now());
-      setRoom(res.room);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Gagal memulai balapan.');
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const handleToggleReady = async () => {
-    if (!room) return;
-    const me = room.participants.find((p) => p.is_me);
-    try {
-      const res = await api.setRoomReady(room.code, !(me?.is_ready ?? false));
-      setRoom(res.room);
-    } catch {}
-  };
-
-  const handleRematch = async () => {
-    if (!room) return;
-    setRematching(true);
-    setError(null);
-    try {
-      const res = await api.rematchRoom(room.code);
-      resetLocalTyping(res.room.generated_text);
-      setClockOffsetMs(res.room.server_time_ms - Date.now());
-      setRoom(res.room);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Gagal membuat soal rematch.');
-    } finally {
-      setRematching(false);
-    }
-  };
-
-  const handleLeaveRoom = async () => {
-    if (!room) return;
-    try {
-      await api.leaveRoom(room.code);
-    } catch {}
-    resetLocalTyping('');
-    setRoom(null);
-    loadOpenRooms();
-  };
-
-  const handleCopyCode = () => {
-    if (!room) return;
-    navigator.clipboard?.writeText(room.code).catch(() => {});
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
-  };
-
+  // Hitung metrics player secara real-time
   const activeTargetWord = words[wordIndex] || '';
-  const isCurrentMismatch =
-    currentInput.length > 0 && !activeTargetWord.startsWith(currentInput);
+  const isCurrentMismatch = currentInput.length > 0 && !activeTargetWord.startsWith(currentInput);
 
   const handleInputChange = (val: string) => {
-    if (!room || room.status !== 'racing' || localFinished || finishedRef.current) return;
-
-    const serverNow = Date.now() + clockOffsetMs;
-    const ms = Math.max(500, serverNow - (room.starts_at_ms || serverNow));
+    if (gameState !== 'racing' || finishedRef.current) return;
 
     let nextHistory = history;
     let nextInput = val;
-    let nextTarget = activeTargetWord;
 
     if (val.endsWith(' ')) {
       const submitted = val.trim();
@@ -437,15 +271,12 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
 
       const nextIdx = wordIndex + 1;
       setWordIndex(nextIdx);
-      nextInput = '';
       setCurrentInput('');
 
-      let nextWords = words;
-      if (nextIdx >= words.length - 25 && baseWords.length > 0) {
-        nextWords = [...words, ...baseWords];
-        setWords(nextWords);
+      // Auto extend words jika player mengetik sangat cepat
+      if (nextIdx >= words.length - 20 && baseWords.length > 0) {
+        setWords((prev) => [...prev, ...baseWords]);
       }
-      nextTarget = nextWords[nextIdx] || '';
     } else {
       if (val.length > currentInput.length) {
         const lastIdx = val.length - 1;
@@ -453,249 +284,196 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
         if (soundEnabled) playKeySound(ok ? 'correct' : 'error');
       }
       setCurrentInput(val);
+      nextInput = val;
     }
 
-    const metrics = evaluateMetrics(nextHistory, nextInput, nextTarget, ms);
-    latestMetricsRef.current = metrics;
-
-    const now = Date.now();
-    if (now - lastSyncRef.current >= 700) {
-      lastSyncRef.current = now;
-      pushProgress(room.code, metrics);
+    // Evaluasi statistik player
+    let correctChars = 0;
+    let incorrectChars = 0;
+    for (const item of nextHistory) {
+      if (item.correct) correctChars += item.target.length + 1;
+      else incorrectChars += Math.max(item.typed.length, item.target.length);
     }
+    for (let i = 0; i < nextInput.length; i++) {
+      if (nextInput[i] === activeTargetWord[i]) correctChars++;
+      else incorrectChars++;
+    }
+
+    const totalEvaluated = correctChars + incorrectChars;
+    const accuracy =
+      totalEvaluated > 0
+        ? Number(Math.max(0, Math.min(100, (correctChars / totalEvaluated) * 100)).toFixed(1))
+        : 100;
+    const minutes = Math.max(elapsedMs, 500) / 60000;
+    const wpm = Number(Math.max(0, correctChars / 5 / minutes).toFixed(1));
+    const rawWpm = Number(Math.max(0, totalEvaluated / 5 / minutes).toFixed(1));
+
+    setPlayerMetrics({
+      wpm,
+      raw_wpm: rawWpm,
+      accuracy,
+      correct_chars: correctChars,
+      incorrect_chars: incorrectChars,
+      total_chars: totalEvaluated,
+    });
   };
 
-  const liveParticipants = useMemo(() => {
-    if (!room) return [];
-    const merged = room.participants.map((p, idx) => {
-      const color = p.is_me ? '#ffb800' : RACER_COLORS[idx % RACER_COLORS.length];
-      if (p.is_me && room.status === 'racing') {
-        const m = latestMetricsRef.current;
-        return {
-          ...p,
-          color,
-          wpm: m.wpm || p.wpm,
-          accuracy: m.accuracy,
-          finished: localFinished || p.finished,
-        };
-      }
-      return { ...p, color };
+  // Hitung progres simulasi bots & live ranking
+  const activeBots = DIFFICULTY_CONFIG[difficulty].bots;
+  const timeProgressFactor = Math.min(1, elapsedMs / VERSUS_DURATION_MS);
+
+  const racers = useMemo(() => {
+    // 1. Player Data
+    const playerRacer = {
+      id: 'player',
+      name: user?.name || 'Racer Anda',
+      username: user?.username || 'anda',
+      isPlayer: true,
+      wpm: playerMetrics.wpm,
+      accuracy: playerMetrics.accuracy,
+      color: '#ffb800', // Gold
+      progress: Math.min(98, Math.max(4, timeProgressFactor * 98 * (playerMetrics.wpm / Math.max(70, playerMetrics.wpm + 10)))),
+    };
+
+    // 2. Bots Data (bergerak natural dengan simulasi waktu)
+    const botRacers = activeBots.map((bot, idx) => {
+      // Sedikit jitter fluktuasi WPM agar terasa seperti lawan nyata
+      const jitter = Math.sin((elapsedMs / 1000) * 1.5 + idx) * 3;
+      const liveWpm = Math.max(10, Math.round(bot.targetWpm + jitter));
+      const targetPct = Math.min(98, (bot.targetWpm / 120) * 98);
+      const progress = Math.min(98, Math.max(4, timeProgressFactor * targetPct));
+
+      return {
+        id: bot.id,
+        name: bot.name,
+        username: bot.tag,
+        isPlayer: false,
+        wpm: liveWpm,
+        accuracy: 98 - idx,
+        color: bot.color,
+        progress,
+      };
     });
 
-    const sorted = [...merged].sort((a, b) => {
-      if (Math.abs(b.wpm - a.wpm) > 0.05) return b.wpm - a.wpm;
-      return b.accuracy - a.accuracy;
-    });
-    const rankMap = new Map<number, number>();
-    sorted.forEach((item, i) => rankMap.set(item.user_id, i + 1));
+    const all = [playerRacer, ...botRacers];
 
-    const maxWpm = Math.max(85, ...merged.map((m) => m.wpm + 5));
-    const timeFactor = room.status === 'finished' ? 1 : Math.min(1, elapsedMs / VERSUS_DURATION_MS);
-
-    return merged.map((p) => ({
-      ...p,
-      liveRank: rankMap.get(p.user_id) || p.rank,
-      barPct: Math.min(98, (p.wpm / maxWpm) * Math.max(0.15, timeFactor) * 100),
+    // Urutkan peringkat berdasarkan WPM tertinggi
+    all.sort((a, b) => b.wpm - a.wpm);
+    return all.map((item, index) => ({
+      ...item,
+      rank: index + 1,
     }));
-  }, [room, currentInput, history, localFinished, elapsedMs]);
+  }, [user, playerMetrics, activeBots, timeProgressFactor, elapsedMs]);
 
-  const filledCount = keywords.filter((k) => k.trim().length > 0).length;
-  const canCreate = selectedLangId > 0 && filledCount === 5 && aiReady && !creatingRoom;
+  const playerCurrentRank = racers.find((r) => r.isPlayer)?.rank || 1;
+  const remainingTimeMs = Math.max(0, VERSUS_DURATION_MS - elapsedMs);
+  const isUrgent = gameState === 'racing' && remainingTimeMs <= 10_000;
 
   // =========================================================================
-  // ACTIVE ROOM VIEW
+  // VIEW: COUNTDOWN / RACING / FINISHED
   // =========================================================================
-  if (room) {
-    const me = room.participants.find((p) => p.is_me);
-    const rankedFinal = [...liveParticipants].sort((a, b) => a.liveRank - b.liveRank);
-    const remainingMs = Math.max(0, VERSUS_DURATION_MS - elapsedMs);
-    const isUrgent = room.status === 'racing' && remainingMs <= 10_000;
-
+  if (gameState !== 'lobby') {
     return (
       <div className="play-cockpit">
+        {/* Top Status Header */}
         <div className="arena-strip" style={{ padding: '12px 18px' }}>
           <div className="row" style={{ gap: 10 }}>
             <span className="live-tag">
               <span className="live-dot" />
-              {room.status === 'waiting'
-                ? 'MENUNGGU KAWAN'
-                : room.status === 'countdown'
-                  ? 'BERSIAP!'
-                  : room.status === 'racing'
-                    ? 'ADU KETIK 1 MENIT'
-                    : 'SELESAI'}
+              {gameState === 'countdown' ? 'BERSIAP!' : gameState === 'racing' ? 'BALAPAN ADU KETIK 1 MENIT' : 'SELESAI'}
             </span>
-            <span className="badge badge-amber mono" style={{ fontSize: '0.84rem' }}>
-              KODE: {room.code}
+            <span className={`badge ${DIFFICULTY_CONFIG[difficulty].badge}`}>
+              {DIFFICULTY_CONFIG[difficulty].label}
             </span>
-            <button type="button" className="btn btn-cyan btn-sm" onClick={handleCopyCode}>
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? 'Tersalin!' : 'Salin'}
-            </button>
-            <span className="badge badge-slate">{room.language.native_name}</span>
+            <span className="badge badge-slate">{passage?.language.native_name || 'Bahasa'}</span>
           </div>
 
-          <div className="row" style={{ gap: 8 }}>
-            {room.status === 'racing' && (
-              <div className="row" style={{ gap: 14, marginRight: 6 }}>
+          <div className="row" style={{ gap: 12 }}>
+            {gameState === 'racing' && (
+              <div className="row" style={{ gap: 14 }}>
                 <div className="row" style={{ gap: 6 }}>
                   <Timer size={20} color={isUrgent ? '#ff3b5c' : '#ffb800'} />
-                  <span
-                    className={`timer-clock ${isUrgent ? 'urgent' : ''}`}
-                    style={{ fontSize: '1.7rem', minWidth: 74 }}
-                  >
-                    {formatClock(remainingMs)}
+                  <span className={`timer-clock ${isUrgent ? 'urgent' : ''}`} style={{ fontSize: '1.7rem', minWidth: 74 }}>
+                    {formatClock(remainingTimeMs)}
                   </span>
                 </div>
-                <span className="mono" style={{ fontWeight: 800, color: 'var(--gold)', fontSize: '1.1rem' }}>
-                  {Math.round(latestMetricsRef.current.wpm)} WPM
+                <span className="mono" style={{ fontWeight: 800, color: 'var(--gold)', fontSize: '1.2rem' }}>
+                  {Math.round(playerMetrics.wpm)} WPM
                 </span>
                 <span className="mono" style={{ fontWeight: 700, color: 'var(--emerald)' }}>
-                  {latestMetricsRef.current.accuracy}%
+                  {playerMetrics.accuracy}%
+                </span>
+                <span className="badge badge-amber" style={{ fontWeight: 800 }}>
+                  POSISI #{playerCurrentRank}
                 </span>
               </div>
             )}
+
             <button
               type="button"
               className="btn btn-secondary btn-icon"
               onClick={() => setSoundEnabled((s) => !s)}
+              title="Efek Suara Keyboard"
             >
-              {soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+              {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
             </button>
-            <button type="button" className="btn btn-danger btn-sm" onClick={handleLeaveRoom}>
-              <DoorOpen size={14} />
-              Keluar
+
+            <button type="button" className="btn btn-danger btn-sm" onClick={() => setGameState('lobby')}>
+              Keluar Balapan
             </button>
           </div>
         </div>
 
-        {error && <div className="alert alert-error">{error}</div>}
-
-        {/* WAITING ROOM */}
-        {room.status === 'waiting' && (
-          <div className="card card-arena stack-md">
-            <div className="victory-banner" style={{ padding: '20px 24px' }}>
-              <div>
-                <div className="display" style={{ fontSize: '0.76rem', color: 'var(--cyan)', fontWeight: 700 }}>
-                  BAGIKAN KODE ROOM KE KAWAN ANDA
-                </div>
-                <div className="row" style={{ marginTop: 6, gap: 12 }}>
-                  <span className="mono" style={{ fontSize: '2.3rem', fontWeight: 800, letterSpacing: '0.14em', color: 'var(--gold)' }}>
-                    {room.code}
-                  </span>
-                  <button type="button" className="btn btn-primary" onClick={handleCopyCode}>
-                    {copied ? <Check size={16} /> : <Copy size={16} />}
-                    {copied ? 'Tersalin!' : 'Salin Kode'}
-                  </button>
-                </div>
-                <div className="kw-tags" style={{ marginTop: 8 }}>
-                  <span className="badge badge-cyan">Durasi: 1 Menit</span>
-                  {room.keywords.map((kw, i) => (
-                    <span key={i} className="kw-tag mono">
-                      #{kw}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <div className="stack-sm" style={{ alignItems: 'flex-end' }}>
-                <span className="badge badge-cyan" style={{ fontSize: '0.84rem', padding: '6px 12px' }}>
-                  <Users size={15} /> {room.participants.length} / 8 Peserta
-                </span>
-                {room.is_host ? (
-                  <button type="button" className="btn btn-race" onClick={handleStartRace} disabled={starting}>
-                    {starting ? <span className="spinner" /> : <Play size={18} />}
-                    {starting ? 'MEMULAI...' : 'MULAI ADU KETIK 1 MENIT!'}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className={`btn ${me?.is_ready ? 'btn-secondary' : 'btn-primary'}`}
-                    onClick={handleToggleReady}
-                  >
-                    <CheckCircle2 size={16} />
-                    {me?.is_ready ? 'SIAP (KLIK BATAL)' : 'SAYA SIAP!'}
-                  </button>
-                )}
-              </div>
+        {/* 1. COUNTDOWN SCREEN */}
+        {gameState === 'countdown' && (
+          <div className="card card-arena" style={{ textAlign: 'center', padding: '54px 24px' }}>
+            <div className="display" style={{ fontSize: '1rem', color: 'var(--cyan)', fontWeight: 700, letterSpacing: '0.15em' }}>
+              BALAPAN DIMULAI DALAM...
             </div>
-
-            <div className="kpi-grid">
-              {liveParticipants.map((p) => (
-                <div
-                  key={p.user_id}
-                  className="kpi-card"
-                  style={{
-                    borderColor: p.is_me ? 'var(--gold)' : `${p.color}55`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 10,
-                    padding: '14px 16px',
-                  }}
-                >
-                  <div>
-                    <div className="row" style={{ gap: 6 }}>
-                      {p.is_host && <Crown size={15} color="#ffb800" />}
-                      <span style={{ fontWeight: 700 }}>{p.name}</span>
-                      {p.is_me && <span className="badge badge-amber">ANDA</span>}
-                    </div>
-                    <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                      @{p.username}
-                    </div>
-                  </div>
-                  <span className={`badge ${p.is_ready ? 'badge-emerald' : 'badge-slate'}`}>
-                    {p.is_ready ? 'SIAP' : 'TUNGGU'}
-                  </span>
-                </div>
-              ))}
+            <div className="mono" style={{ fontSize: '6rem', fontWeight: 900, color: 'var(--gold)', margin: '12px 0' }}>
+              {countdownSec > 0 ? countdownSec : 'GASSS!'}
             </div>
+            <p style={{ color: 'var(--text-secondary)' }}>
+              Siapkan jari Anda di keyboard! Lawan bot siap melaju kencang!
+            </p>
           </div>
         )}
 
-        {/* COUNTDOWN */}
-        {room.status === 'countdown' && (
-          <div className="card card-arena" style={{ textAlign: 'center', padding: '52px 24px' }}>
-            <div className="display" style={{ fontSize: '0.95rem', color: 'var(--cyan)', fontWeight: 700, letterSpacing: '0.15em' }}>
-              ADU KETIK 1 MENIT DIMULAI DALAM...
-            </div>
-            <div className="mono" style={{ fontSize: '5.5rem', fontWeight: 800, color: 'var(--gold)', margin: '10px 0' }}>
-              {countdownSec > 0 ? countdownSec : 'GO!'}
-            </div>
-            <p style={{ color: 'var(--text-secondary)' }}>Siapkan jari di keyboard — semua peserta mulai serentak!</p>
-          </div>
-        )}
-
-        {/* SLIM LIVE RACE TRACK */}
-        {(room.status === 'racing' || room.status === 'finished') && (
-          <div className="slim-race-strip">
-            {liveParticipants.map((p) => {
-              const leftPct = Math.max(3, Math.min(97, p.barPct));
+        {/* 2. REAL-TIME RACE TRACK (SEPANJANG BALAPAN & HASIL) */}
+        {(gameState === 'racing' || gameState === 'finished') && (
+          <div className="slim-race-strip" style={{ marginBottom: 14 }}>
+            {racers.map((r) => {
+              const leftPct = Math.max(3, Math.min(97, r.progress));
               return (
-                <div key={p.user_id} className="slim-lane">
-                  <div className="racer-label" style={{ fontSize: '0.76rem' }}>
-                    <span className={`racer-pos p${Math.min(3, p.liveRank)}`} style={{ width: 21, height: 21, fontSize: '0.68rem' }}>
-                      #{p.liveRank}
+                <div key={r.id} className="slim-lane">
+                  <div className="racer-label" style={{ fontSize: '0.78rem' }}>
+                    <span className={`racer-pos p${Math.min(3, r.rank)}`} style={{ width: 22, height: 22, fontSize: '0.7rem' }}>
+                      #{r.rank}
                     </span>
-                    <span style={{ color: p.is_me ? 'var(--gold)' : 'var(--text-primary)' }}>
-                      {p.username}
+                    <span style={{ color: r.isPlayer ? 'var(--gold)' : 'var(--text-primary)', fontWeight: r.isPlayer ? 800 : 600 }}>
+                      {r.name} {r.isPlayer && '(ANDA)'}
                     </span>
                   </div>
                   <div className="slim-track">
                     <div
                       className="slim-fill"
                       style={{
-                        width: `${Math.max(2, p.barPct)}%`,
-                        background: `linear-gradient(90deg, transparent, ${p.color}bb)`,
+                        width: `${leftPct}%`,
+                        background: `linear-gradient(90deg, transparent, ${r.color}bb)`,
                       }}
                     />
                     <div
                       className="slim-dot"
-                      style={{ left: `${leftPct}%`, background: p.color, boxShadow: `0 0 12px ${p.color}` }}
+                      style={{
+                        left: `${leftPct}%`,
+                        background: r.color,
+                        boxShadow: `0 0 14px ${r.color}`,
+                        transform: 'translate(-50%, -50%) scale(1.1)',
+                      }}
                     />
                   </div>
-                  <div className="racer-wpm" style={{ fontSize: '0.75rem', color: p.color }}>
-                    {Math.round(p.wpm)} WPM
+                  <div className="racer-wpm" style={{ fontSize: '0.78rem', color: r.color, fontWeight: 700 }}>
+                    {r.wpm} WPM
                   </div>
                 </div>
               );
@@ -703,8 +481,8 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
           </div>
         )}
 
-        {/* REAL-INPUT 3-LINE FOCUS TYPING BOX */}
-        {room.status === 'racing' && !localFinished && (
+        {/* 3. FOCUS TYPING BOX */}
+        {gameState === 'racing' && (
           <div
             className={`focus-typing-box focused ${isCurrentMismatch ? 'flash-error' : ''}`}
             onClick={() => inputRef.current?.focus()}
@@ -717,25 +495,16 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
 
                   if (past) {
                     return (
-                      <span
-                        key={idx}
-                        className={`f-word ${past.correct ? 'word-correct' : 'word-wrong'}`}
-                        title={past.correct ? 'Benar' : `Anda ketik: "${past.typed}" (seharusnya "${past.target}")`}
-                      >
+                      <span key={idx} className={`f-word ${past.correct ? 'word-correct' : 'word-wrong'}`}>
                         {word}
                       </span>
                     );
                   }
 
                   if (isActive) {
-                    const extraChars =
-                      currentInput.length > word.length ? currentInput.slice(word.length) : '';
+                    const extraChars = currentInput.length > word.length ? currentInput.slice(word.length) : '';
                     return (
-                      <span
-                        key={idx}
-                        ref={activeWordRef}
-                        className={`f-word ${isCurrentMismatch ? 'active-word-wrong' : 'active-word'}`}
-                      >
+                      <span key={idx} ref={activeWordRef} className={`f-word ${isCurrentMismatch ? 'active-word-wrong' : 'active-word'}`}>
                         {word.split('').map((ch, cIdx) => {
                           let cls = 'f-char';
                           if (cIdx < currentInput.length) {
@@ -781,7 +550,7 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
               ) : isCurrentMismatch ? (
                 <span className="live-match-pill err">✗ Salah! Target: {activeTargetWord}</span>
               ) : currentInput === activeTargetWord ? (
-                <span className="live-match-pill ok">✓ Cocok — Spasi</span>
+                <span className="live-match-pill ok">✓ Cocok — Tekan Spasi</span>
               ) : (
                 <span className="live-match-pill ok">✓ Sesuai</span>
               )}
@@ -790,34 +559,42 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
             <div className="time-progress-bar">
               <div
                 className={`time-progress-fill ${isUrgent ? 'urgent' : ''}`}
-                style={{ width: `${Math.max(0, 100 - (elapsedMs / VERSUS_DURATION_MS) * 100)}%` }}
+                style={{ width: `${Math.max(0, (remainingTimeMs / VERSUS_DURATION_MS) * 100)}%` }}
               />
             </div>
           </div>
         )}
 
-        {/* FINISH PODIUM */}
-        {(localFinished || room.status === 'finished') && (
+        {/* 4. FINISH PODIUM RESULT */}
+        {gameState === 'finished' && (
           <div className="card card-arena stack-md">
             <div className="row-between">
               <div>
-                <h2 className="cockpit-title" style={{ fontSize: '1.35rem' }}>
-                  <Trophy size={22} color="#ffb800" />
-                  HASIL AKHIR <span>ADU KETIK 1 MENIT</span>
+                <h2 className="cockpit-title" style={{ fontSize: '1.45rem' }}>
+                  {playerCurrentRank === 1 ? (
+                    <>
+                      <Crown size={26} color="#ffb800" />
+                      SELAMAT! ANDA <span>JUARA 1</span>!
+                    </>
+                  ) : (
+                    <>
+                      <Trophy size={24} color="#00f0ff" />
+                      HASIL BALAPAN <span>ADU KETIK 1 MENIT</span>
+                    </>
+                  )}
                 </h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.84rem', marginTop: 2 }}>
-                  Skor 1 menit otomatis tersimpan ke database & klasemen global.
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.86rem', marginTop: 4 }}>
+                  Hasil balapan Anda telah otomatis tercatat ke Riwayat & Papan Klasemen!
                 </p>
               </div>
-              <div className="row">
-                {room.is_host && (
-                  <button type="button" className="btn btn-race" onClick={handleRematch} disabled={rematching}>
-                    {rematching ? <span className="spinner" /> : <RotateCcw size={16} />}
-                    {rematching ? 'SOAL BARU...' : 'REMATCH 1 MENIT'}
-                  </button>
-                )}
-                <button type="button" className="btn btn-secondary" onClick={handleLeaveRoom}>
-                  Kembali
+
+              <div className="row" style={{ gap: 10 }}>
+                <button type="button" className="btn btn-race" onClick={handleStartRace} disabled={starting}>
+                  <RotateCcw size={16} />
+                  {starting ? 'MEMUAT...' : 'TANDING ULANG'}
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => setGameState('lobby')}>
+                  Ganti Sirkuit / Kesulitan
                 </button>
               </div>
             </div>
@@ -826,40 +603,40 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>Posisi</th>
-                    <th>Peserta</th>
-                    <th>WPM (1 Menit)</th>
+                    <th>Podium</th>
+                    <th>Pembalap</th>
+                    <th>Kecepatan (WPM)</th>
                     <th>Akurasi</th>
-                    <th>Tier</th>
+                    <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rankedFinal.map((p) => {
-                    const tier = getRankTier(p.wpm);
+                  {racers.map((r) => {
+                    const tier = getRankTier(r.wpm);
                     return (
-                      <tr key={p.user_id} className={p.is_me ? 'is-me-row' : ''}>
+                      <tr key={r.id} className={r.isPlayer ? 'is-me-row' : ''}>
                         <td>
-                          <span className={`racer-pos ${p.liveRank <= 3 ? `p${p.liveRank}` : ''}`}>
-                            #{p.liveRank}
+                          <span className={`racer-pos ${r.rank <= 3 ? `p${r.rank}` : ''}`}>
+                            #{r.rank}
                           </span>
                         </td>
                         <td>
                           <div style={{ fontWeight: 700 }}>
-                            {p.name} {p.is_me && <span className="badge badge-amber">ANDA</span>}
+                            {r.name} {r.isPlayer && <span className="badge badge-amber">ANDA</span>}
                           </div>
-                          <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                            @{p.username}
+                          <div className="mono" style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            {r.username}
                           </div>
                         </td>
-                        <td className="mono" style={{ fontWeight: 800, color: 'var(--gold)', fontSize: '1.05rem' }}>
-                          {p.wpm} WPM
+                        <td className="mono" style={{ fontWeight: 800, color: 'var(--gold)', fontSize: '1.1rem' }}>
+                          {r.wpm} WPM
                         </td>
                         <td className="mono" style={{ color: 'var(--emerald)', fontWeight: 700 }}>
-                          {p.accuracy}%
+                          {r.accuracy}%
                         </td>
                         <td>
                           <span className="badge" style={{ color: tier.color, border: `1px solid ${tier.color}55` }}>
-                            {tier.shortLabel}
+                            {tier.label}
                           </span>
                         </td>
                       </tr>
@@ -875,234 +652,177 @@ export function VersusPage({ onOpenAdminAi }: VersusPageProps) {
   }
 
   // =========================================================================
-  // CLEAN 2-TAB VERSUS LOBBY
+  // VIEW: BOT ARENA LOBBY (LANGSUNG PILIH & GAS BALAPAN TANPA ROOM CODE)
   // =========================================================================
+  const filledCount = keywords.filter((k) => k.trim().length > 0).length;
+  const canStart = selectedLangId > 0 && filledCount === 5 && !starting;
+
   return (
     <div className="play-cockpit">
+      {/* Header */}
       <div className="cockpit-head">
         <div>
           <h1 className="cockpit-title">
-            <Swords size={24} color="#ff2e88" />
-            ADU KETIK 1 MENIT <span>DENGAN KAWAN</span>
+            <Swords size={26} color="#ff2e88" />
+            ADU KETIK <span>LAWAN BOT ESPORTS</span>
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginTop: 4 }}>
-            Bertanding 60 detik serentak bersama kawan (hingga 8 peserta) dengan teks AI yang sama.
+            Tantang bot pembalap AI dalam sprint ketik 60 detik. Tanpa perlu buat room, langsung pilih kesulitan dan gass!
           </p>
         </div>
 
-        <span className={`badge ${aiReady ? 'badge-emerald' : 'badge-rose'}`} style={{ padding: '6px 12px' }}>
-          {aiReady ? '● AI Generator Siap' : '● AI Belum Diatur Admin'}
+        <span className={`badge ${aiReady ? 'badge-emerald' : 'badge-amber'}`} style={{ padding: '6px 14px' }}>
+          {aiReady ? '● Mesin AI Siap' : '● Mode Adaptif Aktif'}
         </span>
-      </div>
-
-      <div className="subtabs">
-        <button
-          type="button"
-          className={`subtab ${lobbyTab === 'join' ? 'active' : ''}`}
-          onClick={() => setLobbyTab('join')}
-        >
-          <LogIn size={16} />
-          Gabung Room Kawan ({openRooms.length})
-        </button>
-        <button
-          type="button"
-          className={`subtab ${lobbyTab === 'create' ? 'active' : ''}`}
-          onClick={() => setLobbyTab('create')}
-        >
-          <Flame size={16} />
-          Buat Room Baru
-        </button>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
 
-      {lobbyTab === 'join' ? (
-        <div className="card card-arena stack-md">
-          <div className="form-group">
-            <span className="form-label">Masukkan Kode Room dari Kawan</span>
-            <div className="row">
+      <div className="card card-arena stack-lg">
+        {/* 1. PILIH TINGKAT KESULITAN BOT (EASY, MEDIUM, HARD) */}
+        <div>
+          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+            <Zap size={16} color="#ffb800" />
+            1. PILIH TINGKAT KESULITAN BOT:
+          </label>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: 14,
+            }}
+          >
+            {(['easy', 'medium', 'hard'] as BotDifficulty[]).map((diff) => {
+              const cfg = DIFFICULTY_CONFIG[diff];
+              const isSelected = difficulty === diff;
+              return (
+                <button
+                  key={diff}
+                  type="button"
+                  onClick={() => setDifficulty(diff)}
+                  className={`kpi-card`}
+                  style={{
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    padding: '16px',
+                    borderRadius: 12,
+                    background: isSelected ? 'rgba(0, 240, 255, 0.08)' : 'rgba(15, 23, 42, 0.6)',
+                    borderColor: isSelected ? 'var(--cyan)' : 'rgba(255, 255, 255, 0.1)',
+                    boxShadow: isSelected ? '0 0 16px rgba(0, 240, 255, 0.25)' : 'none',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  <div className="row-between" style={{ marginBottom: 6 }}>
+                    <span style={{ fontWeight: 800, fontSize: '0.96rem', color: isSelected ? 'var(--cyan)' : 'var(--text-primary)' }}>
+                      {cfg.label}
+                    </span>
+                    {isSelected && <CheckCircle2 size={18} color="#00f0ff" />}
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', lineHeight: 1.5, marginBottom: 10 }}>
+                    {cfg.desc}
+                  </p>
+                  <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                    {cfg.bots.map((b) => (
+                      <span key={b.id} className="badge mono" style={{ color: b.color, borderColor: `${b.color}55`, fontSize: '0.72rem' }}>
+                        {b.name}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 2. PILIH BAHASA */}
+        <div>
+          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+            <Globe size={16} color="#00f0ff" />
+            2. PILIH BAHASA LINTASAN KETIK:
+          </label>
+          <div className="lang-pill-row">
+            {languages.map((lang) => (
+              <button
+                key={lang.id}
+                type="button"
+                className={`lang-pill ${selectedLangId === lang.id ? 'active' : ''}`}
+                onClick={() => setSelectedLangId(lang.id)}
+              >
+                <span>{lang.native_name}</span>
+                <span className="mono" style={{ fontSize: '0.7rem', opacity: 0.75 }}>
+                  ({lang.code})
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 3. 5 KATA UTAMA */}
+        <div>
+          <div className="row-between" style={{ marginBottom: 8 }}>
+            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Hash size={16} color="#ff2e88" />
+              3. MASUKKAN 5 KATA UTAMA TOPIK BALAPAN:
+            </label>
+            <span className="mono" style={{ fontSize: '0.78rem', color: filledCount === 5 ? 'var(--emerald)' : 'var(--gold)' }}>
+              {filledCount}/5 Terisi
+            </span>
+          </div>
+
+          <div className="row" style={{ gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Preset Cepat:</span>
+            {KEYWORD_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setKeywords([...p.words])}
+                style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+              gap: 8,
+            }}
+          >
+            {keywords.map((kw, i) => (
               <input
+                key={i}
                 type="text"
                 className="input mono"
-                style={{ flex: 1, fontSize: '1.15rem', fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase' }}
-                placeholder="CONTOH: KV7X2A"
-                maxLength={10}
-                value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleJoinRoom();
+                placeholder={`Kata #${i + 1}`}
+                value={kw}
+                onChange={(e) => {
+                  const copy = [...keywords];
+                  copy[i] = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 20);
+                  setKeywords(copy);
                 }}
               />
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ padding: '12px 22px' }}
-                onClick={() => handleJoinRoom()}
-                disabled={joiningRoom || !joinCode.trim()}
-              >
-                {joiningRoom ? <span className="spinner" /> : <Swords size={16} />}
-                Gabung Room
-              </button>
-            </div>
-          </div>
-
-          <div style={{ paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-            <div className="row-between" style={{ marginBottom: 10 }}>
-              <span className="form-label">Room Terbuka Saat Ini</span>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={loadOpenRooms} disabled={loadingOpenRooms}>
-                <RefreshCw size={13} className={loadingOpenRooms ? 'spinner' : ''} />
-                Refresh
-              </button>
-            </div>
-
-            {openRooms.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.88rem', padding: '16px 0' }}>
-                Belum ada room terbuka. Klik tab <strong>Buat Room Baru</strong> untuk mengundang kawan Anda!
-              </div>
-            ) : (
-              <div className="stack-sm">
-                {openRooms.map((r) => (
-                  <div
-                    key={r.code}
-                    className="row-between"
-                    style={{
-                      padding: '11px 14px',
-                      borderRadius: 12,
-                      background: 'var(--bg-input)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    <div>
-                      <div className="row" style={{ gap: 8 }}>
-                        <span className="badge badge-amber mono">{r.code}</span>
-                        <span style={{ fontWeight: 700 }}>{r.host_name}</span>
-                        <span className="badge badge-cyan">{r.language_native_name}</span>
-                      </div>
-                      <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                        {r.participant_count} peserta • #{r.keywords.join(' #')}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-cyan btn-sm"
-                      onClick={() => handleJoinRoom(r.code)}
-                      disabled={joiningRoom}
-                    >
-                      Gabung
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            ))}
           </div>
         </div>
-      ) : (
-        <div className="card card-arena stack-md">
-          {!aiReady && (
-            <div className="alert alert-warning" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
-              <div className="row" style={{ gap: 8, flex: 1 }}>
-                <AlertCircle size={17} />
-                <span>
-                  {user?.role === 'admin'
-                    ? 'API key Google AI Studio belum dikonfigurasi. Atur melalui Admin HQ.'
-                    : 'Layanan AI belum diaktifkan oleh Administrator. Silakan hubungi Admin.'}
-                </span>
-              </div>
-              {user?.role === 'admin' && (
-                <button type="button" className="btn btn-cyan btn-sm" onClick={onOpenAdminAi}>
-                  <KeyRound size={14} />
-                  Atur di Admin HQ
-                </button>
-              )}
-            </div>
-          )}
 
-          <div className="form-group">
-            <span className="form-label">
-              <span className="row" style={{ gap: 6 }}>
-                <Globe size={15} color="#00f0ff" />
-                1. Pilih Bahasa
-              </span>
-            </span>
-            <div className="pill-strip">
-              {languages.map((lang) => (
-                <button
-                  key={lang.id}
-                  type="button"
-                  className={`choice-pill ${lang.id === selectedLangId ? 'active' : ''}`}
-                  onClick={() => setSelectedLangId(lang.id)}
-                >
-                  <span className="mono" style={{ fontSize: '0.72rem', opacity: 0.75 }}>
-                    {lang.code.toUpperCase()}
-                  </span>
-                  <span>{lang.native_name}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="form-group">
-            <div className="form-label">
-              <span className="row" style={{ gap: 6 }}>
-                <Hash size={15} color="#00e599" />
-                2. Masukkan 5 Kata Utama Soal Balapan
-              </span>
-              <span className={`badge ${filledCount === 5 ? 'badge-emerald' : 'badge-slate'}`}>
-                {filledCount} / 5 Kata
-              </span>
-            </div>
-
-            <div className="keywords-grid">
-              {keywords.map((kw, idx) => (
-                <div key={idx} className={`keyword-slot ${kw.trim() ? 'filled' : ''}`}>
-                  <div className="keyword-slot-head">
-                    <span>KATA {idx + 1}</span>
-                  </div>
-                  <input
-                    type="text"
-                    placeholder={`Kata ${idx + 1}...`}
-                    value={kw}
-                    maxLength={40}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setKeywords((prev) => prev.map((item, i) => (i === idx ? val : item)));
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div className="preset-row">
-              <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Isi cepat:</span>
-              {KEYWORD_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  type="button"
-                  className="preset-chip"
-                  onClick={() => setKeywords([...p.words])}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="row-between" style={{ paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-            <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-              Durasi otomatis 1 menit • Model AI diatur terpusat oleh Admin.
-            </span>
-            <button
-              type="button"
-              className="btn btn-race"
-              onClick={handleCreateRoom}
-              disabled={!canCreate}
-            >
-              {creatingRoom ? <span className="spinner" /> : <Swords size={18} />}
-              {creatingRoom ? 'MEMBUAT ROOM...' : 'BUAT ROOM 1 MENIT'}
-            </button>
-          </div>
+        {/* TOMBOL GAS BALAPAN */}
+        <div style={{ paddingTop: 8 }}>
+          <button
+            type="button"
+            className="btn btn-race"
+            style={{ width: '100%', padding: '16px', fontSize: '1.15rem' }}
+            disabled={!canStart}
+            onClick={handleStartRace}
+          >
+            {starting ? <span className="spinner" /> : <Play size={20} />}
+            {starting ? 'MENYIAPKAN SIRKUIT BALAP...' : 'GAS BALAPAN 1 MENIT SEKARANG!'}
+          </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }
