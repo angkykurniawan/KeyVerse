@@ -865,9 +865,26 @@ class ClientStore {
     const user = this.getAuthUser() || this.state.users[0];
     const p = room.participants.find((item) => item.user_id === user.id);
     if (p) {
+      const wasFinished = p.finished;
       Object.assign(p, payload);
       if (payload.finished && !p.finished_at_ms) {
         p.finished_at_ms = Date.now();
+      }
+      if (payload.finished && !wasFinished) {
+        this.saveSession({
+          language_id: room.language.id,
+          keywords: room.keywords,
+          ai_model: room.ai_model,
+          generated_text: room.generated_text,
+          wpm: payload.wpm,
+          raw_wpm: payload.raw_wpm,
+          accuracy: payload.accuracy,
+          total_chars: room.generated_text.length,
+          correct_chars: payload.correct_chars,
+          incorrect_chars: payload.incorrect_chars,
+          word_count: room.word_count,
+          duration_seconds: payload.duration_seconds || 60,
+        });
       }
     }
     this.saveState();
