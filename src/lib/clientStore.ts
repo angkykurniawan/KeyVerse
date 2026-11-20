@@ -182,9 +182,25 @@ interface AppState {
 
 class ClientStore {
   private state: AppState;
+  private bc: BroadcastChannel | null = null;
 
   constructor() {
     this.state = this.loadState();
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.bc = new BroadcastChannel('keyverse_race_channel');
+        this.bc.onmessage = () => {
+          this.loadState();
+        };
+      } catch {
+        // BroadcastChannel fallback
+      }
+    }
+  }
+
+  private sync(): AppState {
+    this.state = this.loadState();
+    return this.state;
   }
 
   private loadState(): AppState {
@@ -218,6 +234,7 @@ class ClientStore {
   private saveState(state: AppState = this.state): void {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      this.bc?.postMessage({ type: 'SYNC' });
     } catch {
       // localStorage error (quota)
     }
@@ -731,6 +748,7 @@ class ClientStore {
 
   // --- Multiplayer Versus Rooms ---
   getOpenRooms(): { rooms: OpenRoomSummary[] } {
+    this.sync();
     const summaries: OpenRoomSummary[] = this.state.rooms
       .filter((r) => r.status === 'waiting')
       .map((r) => ({
@@ -749,6 +767,7 @@ class ClientStore {
   }
 
   createRoom(payload: { language_id: number; keywords: string[] }): { room: RaceRoom } {
+    this.sync();
     const user = this.getAuthUser() || this.state.users[0];
     const lang = this.state.languages.find((l) => l.id === payload.language_id) || this.state.languages[0];
     const code = 'KV' + Math.random().toString(36).substring(2, 6).toUpperCase();
@@ -797,8 +816,10 @@ class ClientStore {
   }
 
   joinRoom(code: string): { room: RaceRoom } {
-    const room = this.state.rooms.find((r) => r.code.toUpperCase() === code.trim().toUpperCase());
-    if (!room) throw new Error('Room tidak ditemukan atau telah ditutup.');
+    this.sync();
+    const cleanCode = code.trim().toUpperCase();
+    const room = this.state.rooms.find((r) => r.code.toUpperCase() === cleanCode);
+    if (!room) throw new Error(`Room dengan kode '${cleanCode}' tidak ditemukan atau telah ditutup.`);
     const user = this.getAuthUser() || this.state.users[0];
 
     const exists = room.participants.some((p) => p.user_id === user.id);
@@ -823,44 +844,73 @@ class ClientStore {
       });
     }
 
-    room.is_host = room.host_user_id === user.id;
     this.saveState();
-    return { room };
+    return this.getRoom(code);
   }
 
   getRoom(code: string): { room: RaceRoom } {
-    const room = this.state.rooms.find((r) => r.code.toUpperCase() === code.trim().toUpperCase());
+    this.sync();
+    const cleanCode = code.trim().toUpperCase();
+    const room = this.state.rooms.find((r) => r.code.toUpperCase() === cleanCode);
     if (!room) throw new Error('Room tidak ditemukan.');
     const user = this.getAuthUser() || this.state.users[0];
-    room.is_host = room.host_user_id === user.id;
-    room.server_time_ms = Date.now();
-    return { room };
+
+    const now = Date.now();
+    if (room.status === 'countdown' && room.starts_at_ms && now >= room.starts_at_ms) {
+      room.status = 'racing';
+      this.saveState();
+    } else if (room.status === 'racing') {
+      const allDone = room.participants.length > 0 && room.participants.every((p) => p.finished);
+      const timeOver = room.starts_at_ms && now >= room.starts_at_ms + 62000;
+      if (allDone || timeOver) {
+        room.status = 'finished';
+        this.saveState();
+      }
+    }
+
+    return {
+      room: {
+        ...room,
+        is_host: room.host_user_id === user.id,
+        server_time_ms: now,
+        participants: room.participants.map((p) => ({
+          ...p,
+          is_me: p.user_id === user.id,
+        })),
+      },
+    };
   }
 
   setRoomReady(code: string, is_ready: boolean): { room: RaceRoom } {
-    const room = this.state.rooms.find((r) => r.code.toUpperCase() === code.trim().toUpperCase());
+    this.sync();
+    const cleanCode = code.trim().toUpperCase();
+    const room = this.state.rooms.find((r) => r.code.toUpperCase() === cleanCode);
     if (!room) throw new Error('Room tidak ditemukan.');
     const user = this.getAuthUser() || this.state.users[0];
     const p = room.participants.find((item) => item.user_id === user.id);
     if (p) p.is_ready = is_ready;
     this.saveState();
-    return { room };
+    return this.getRoom(code);
   }
 
   startRoom(code: string): { room: RaceRoom } {
-    const room = this.state.rooms.find((r) => r.code.toUpperCase() === code.trim().toUpperCase());
+    this.sync();
+    const cleanCode = code.trim().toUpperCase();
+    const room = this.state.rooms.find((r) => r.code.toUpperCase() === cleanCode);
     if (!room) throw new Error('Room tidak ditemukan.');
     room.status = 'countdown';
     room.starts_at_ms = Date.now() + 3500;
     this.saveState();
-    return { room };
+    return this.getRoom(code);
   }
 
   sendRoomProgress(
     code: string,
     payload: { progress: number; wpm: number; raw_wpm: number; accuracy: number; correct_chars: number; incorrect_chars: number; duration_seconds: number; finished: boolean }
   ): { room: RaceRoom } {
-    const room = this.state.rooms.find((r) => r.code.toUpperCase() === code.trim().toUpperCase());
+    this.sync();
+    const cleanCode = code.trim().toUpperCase();
+    const room = this.state.rooms.find((r) => r.code.toUpperCase() === cleanCode);
     if (!room) throw new Error('Room tidak ditemukan.');
     const user = this.getAuthUser() || this.state.users[0];
     const p = room.participants.find((item) => item.user_id === user.id);
@@ -888,11 +938,13 @@ class ClientStore {
       }
     }
     this.saveState();
-    return { room };
+    return this.getRoom(code);
   }
 
   rematchRoom(code: string): { room: RaceRoom } {
-    const room = this.state.rooms.find((r) => r.code.toUpperCase() === code.trim().toUpperCase());
+    this.sync();
+    const cleanCode = code.trim().toUpperCase();
+    const room = this.state.rooms.find((r) => r.code.toUpperCase() === cleanCode);
     if (!room) throw new Error('Room tidak ditemukan.');
     room.status = 'waiting';
     room.starts_at_ms = null;
@@ -904,11 +956,13 @@ class ClientStore {
       p.finished_at_ms = null;
     });
     this.saveState();
-    return { room };
+    return this.getRoom(code);
   }
 
   leaveRoom(code: string): { message: string } {
-    const room = this.state.rooms.find((r) => r.code.toUpperCase() === code.trim().toUpperCase());
+    this.sync();
+    const cleanCode = code.trim().toUpperCase();
+    const room = this.state.rooms.find((r) => r.code.toUpperCase() === cleanCode);
     if (room) {
       const user = this.getAuthUser() || this.state.users[0];
       room.participants = room.participants.filter((p) => p.user_id !== user.id);
